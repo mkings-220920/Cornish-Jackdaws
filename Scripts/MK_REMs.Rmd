@@ -1,0 +1,712 @@
+---
+title: "MK Darwin Board experiment REMs"
+author: "MK"
+date: "17 October 2020"
+output: html_document
+---
+
+Load required packages and datasets
+
+```{r}
+setwd("C:\\Users\\Mike\\Documents\\DB_experiments\\Files for publication\\Data")
+library(survival)
+library(car)
+library(lme4)
+library(scales)    
+
+context_df<-read.csv("DB_REM_INPUT.csv",header=T)    #Read in the pre-Eventnet processed dataset for the purposes of transplanting the lock.bool, pre.dur and post.dur columns
+context_clip<-context_df[which(context_df$TYPE %in% c("SOLO_NO_COOP","COOP_SUCCESS","COOP_FAIL","SCROUNGE")),]   #Remove covariates and replacements (point-events) removed
+covars<-context_df[which(context_df$TYPE %in% c("at_risk","IS_ADULT","IS_GROUP_A","SEX","PARENT-OFFSPRING","PARTNER","SIBLING")),]
+```
+
+
+
+
+Dyad & Network-level hypotheses. The input files for these analyses comprise permuted REM datasets produced by permutation of all identity labels (Perm 1 - Non-independent permutation of SOURCE and TARGET labels) and subsequently processed in Eventnet 0.5.2
+
+ - Model 1: Differences in interaction rate attributable to properties of dyads (number of previous events, same/diff treatment group, affiliated/not-affiliated). 
+ 
+ - Model 2: Changes in interaction rates over the course of the experiment (for different types of dyad: same/diff treatment group, affiliated/not affiliated, familiar/unfamiliar). 
+ 
+ - Model 3: Changes in (local) network structure over the course of the experiment, as measured by triadic closure (closure of triads: interaction of two individuals that have previously both interacted with a common third individual).  Baseline (i.e. irrespective of experimental design) rate of closure and rate of closure of same-group only triads (all three members belonging to the same treatment group) estimated. 
+
+
+```{r}
+setwd("C:\\Users\\Mike\\Documents\\DB_experiments\\ptests_perm1_041220_EVout\\ptests_perm1_041220")
+feed_files<-list.files(no..=TRUE)   #Get list of files within current directory
+coop_indicator<-unlist(sapply(feed_files,function(x) grepl("COOP_EVENTS",x)))   #Find file names containing "COOP_EVENTS" (Eventnet cooperation observations output)
+coop_files<-feed_files[coop_indicator]    #Filter list of all file names to just COOP_EVENTS files
+cox_dyad_list<-list()     
+cox_trt_list<-list()
+cox_tri_list<-list()
+pred_list1<-list()
+pred_list2<-list()
+pred_list3<-list()
+
+for(i in 1:length(coop_files))  #loop over all cooperation files in directory
+{
+  print(i)
+  coop.events<-read.csv(coop_files[i],header=T,row.names=NULL)  #read in current Eventnet output file
+  coop.events$same_group<-apply(coop.events,1,function(x) if(as.numeric(x["source.is.groupA"])==as.numeric(x["target.is.groupA"])){1} else {0}) #Check the group assignments of each SOURCE and TARGET pair and create a binary indicator of whether the pair belonged to the same, or different, treatment groups.
+  coop.events$TIME<-rescale(coop.events$TIME)  #JL: variable varies too much; scale to make parameter better interpretable
+  coop.events$dyad.coop.count<-coop.events$dyad.success.count + coop.events$dyad.fail.count    #Get a single variable containing info on number of events engaged in by a dyad.
+  coop.events$dyad.coop.cat<-sapply(as.numeric(coop.events$dyad.coop.count),function(x) if(x<1){"ARE_UNFAMILIAR"} else if(x>0 && x<6){"FAMILIAR_1TO5"} else {"FAMILIAR_6PLUS"})     #Split count of dyadic cooperation events into three categories (ARE_UNFAMILIAR = dyad has not had a previous event; FAMILIAR_1TO5 = dyad has had between one and five previous events; FAMILIAR_6PLUS = dyad has had six or more previous events)
+  coop.events$is.affiliate<-sapply(coop.events$is.affiliate,function(x) if(x>0){1} else{0})    #ensure that affiliation indicator is 0/1 (affiliated==1)
+  coop.events$dyad.has.previous<-coop.events$dyad.has.previous.fail + coop.events$dyad.has.previous.success  #Single variable indicating whether a dyad has had at least one previous interaction
+  coop.events$dyad.has.previous<-apply(coop.events,1,function(x) if(as.numeric(x["dyad.has.previous"])>0){1} else {0})  #ensure that dyad.has.previous indicator is 0/1 (has had a previous event == 1)
+  coop.events$event.indicator<-apply(coop.events,1,function(x) if(x["TYPE"]=="NON-EVENT"){0} else {1})   #Make sure that events (1) and non-events (0) have separate labels
+  my.surv.coop<-Surv(time = rep(1,dim(coop.events)[1]), event = coop.events$event.indicator)  #Create a survival object to serve as the response term in coxph
+  
+    #Model 1:
+    tempw1<-tryCatch(perm.dyad.coop<-coxph(my.surv.coop ~ 
+                                             is.affiliate*same_group*dyad.coop.cat
+                                             + strata(TIME) 
+                                             , data = coop.events),warning=function(w) return("W"))
+    
+    if(is.object(tempw1)){        #If the model has been fitted successfully (i.e. without warnings)
+      cox_dyad_list[[i]]<-as.data.frame(t(tempw1$coefficients))     #Store model coefficients as a dataframe in the current list element
+      newdf<-data.frame(is.affiliate=rep(c(0,1,0,1),3),same_group=rep(c(0,0,1,1),3),dyad.coop.cat=c("ARE_UNFAMILIAR","ARE_UNFAMILIAR","ARE_UNFAMILIAR","ARE_UNFAMILIAR","FAMILIAR_1TO5","FAMILIAR_1TO5","FAMILIAR_1TO5","FAMILIAR_1TO5","FAMILIAR_6PLUS","FAMILIAR_6PLUS","FAMILIAR_6PLUS","FAMILIAR_6PLUS"))      #create a new dataset for the purpose of getting predicted values from the REM
+      tempdf1<-cbind(newdf,as.data.frame(predict(tempw1,newdata=newdf,type="risk",reference="sample")))
+      colnames(tempdf1)[ncol(tempdf1)]<-"PRED_VAL"
+      pred_list1[[i]]<-tempdf1  #Get predicted values for each of the scenarios contained in the 'newdata' dataframe from the REM. Results returned as relative risks (i.e. exp(raw coef)) and a single sample-wide baseline hazard is used (reference=sample). see ?predict.coxph for more details.
+    } else {
+      cox_dyad_list[[i]]<-NULL
+      pred_list1[[i]]<-NULL
+    }
+  
+    #Model 2:
+    tempw2<-tryCatch(perm.net.coop<-coxph(my.surv.coop ~ 
+                                            network.num.coop*same_group*is.affiliate
+                                            + dyad.has.previous*network.num.coop
+                                            - network.num.coop
+                                            + strata(TIME) 
+                                            , data = coop.events),warning=function(w) return("W"))
+    
+    if(is.object(tempw2)){         #If the model has been fitted successfully (i.e. without warnings)
+      cox_trt_list[[i]]<-as.data.frame(t(tempw2$coefficients))           #Store model coefficients as a dataframe in the current list element
+      time_temp<-as.numeric(coop.events[coop.events$TYPE!="NON-EVENT","TIME"])
+      events_temp<-floor(as.numeric(unlist(lapply(split(coop.events,coop.events$TIME_UNIT),function(x) median(x$network.num.coop)))))
+      tt2<-unique(time_temp[which(coop.events[coop.events$TYPE!="NON-EVENT","network.num.coop"] %in% events_temp)])
+      ltt<-length(tt2)
+      newdf2<-data.frame(is.affiliate=rep(c(0,1,0,1),(ltt*2)),same_group=rep(c(0,0,1,1),(ltt*2)),dyad.has.previous=c(rep(0,(ltt*4)),rep(1,(ltt*4))),network.num.coop=rep(events_temp,8),TIME=rep(tt2,8))      #create a new dataset for the purpose of getting predicted values from the REM
+      tempdf2<-cbind(newdf2,as.data.frame(predict(tempw2,newdata=newdf2,type="risk",reference="strata")))
+      colnames(tempdf2)[ncol(tempdf2)]<-"PRED_VAL"
+      pred_list2[[i]]<-tempdf2   #Get predicted values for each of the scenarios contained in the 'newdata' dataframe from the REM. Results returned as relative risks (i.e. exp(raw coef)) and the baseline hazard for each prediction depends upon the 'STRATA' in which it belongs. see ?predict.coxph for details.
+    } else {
+      cox_trt_list[[i]]<-NULL
+      pred_list2[[i]]<-NULL
+    }
+    
+    #Model 3:
+    tempw3<-tryCatch(unperm.triad.coop<-coxph(my.surv.coop ~ 
+                                                network.num.coop*(triadic.closure.coop + success.closure)
+                                                - network.num.coop
+                                                + strata(TIME) 
+                                                , data = coop.events),warning=function(w) return("W"))
+    
+    if(is.object(tempw3)){                 #If the model has been fitted successfully (i.e. without warnings)
+      cox_tri_list[[i]]<-as.data.frame(t(tempw3$coefficients))       #Store model coefficients as a dataframe in the current list element
+      newdf3<-data.frame(network.num.coop=rep(c(1:ltt),2),triadic.closure.coop=rep(1,(ltt*2)),success.closure=c(rep(0,ltt),rep(1,ltt)),TIME=rep(tt2,2))
+      tempdf3<-cbind(newdf3,as.data.frame(predict(tempw3,newdata=newdf3,type="risk",reference="strata")))
+      colnames(tempdf3)[ncol(tempdf3)]<-"PRED_VAL"
+      pred_list3[[i]]<-tempdf3
+    } else {
+      cox_tri_list[[i]]<-NULL
+    }
+}
+
+cox_dyad_df<-do.call(rbind,cox_dyad_list)    #Combine coefficients from each permuted REM for a given model type to get a single dataframe of pREM coefficients (with nrow == nperm)
+cox_trt_df<-do.call(rbind,cox_trt_list)
+cox_tri_df<-do.call(rbind,cox_tri_list)
+
+#Determine median coefficient values and 95% confidence intervals from quantiles of pREM coefficient distributions:
+
+quant_list1<-apply(cox_dyad_df,2,function(x) data.frame(CI_LOW=quantile(x,probs=0.025),MED=quantile(x,probs=0.5),CI_HIGH=quantile(x,probs=0.975),MINIMUM=min(x),MAXIMUM=max(x),I.R.=exp(quantile(x,probs=0.5))))
+quant_df1<-do.call(rbind,quant_list1)
+write.csv(quant_df1,"dyad_quantdf.csv")
+
+quant_list2<-apply(cox_trt_df,2,function(x) data.frame(CI_LOW=quantile(x,probs=0.025),MED=quantile(x,probs=0.5),CI_HIGH=quantile(x,probs=0.975),MINIMUM=min(x),MAXIMUM=max(x),I.R.=exp(quantile(x,probs=0.5))))
+quant_df2<-do.call(rbind,quant_list2)
+write.csv(quant_df2,"trt_quantdf.csv")
+
+quant_list3<-apply(cox_tri_df,2,function(x) data.frame(CI_LOW=quantile(x,probs=0.025),MED=quantile(x,probs=0.5),CI_HIGH=quantile(x,probs=0.975),MINIMUM=min(x),MAXIMUM=max(x),I.R.=exp(quantile(x,probs=0.5))))
+quant_df3<-do.call(rbind,quant_list3)
+write.csv(quant_df3,"tri_quantdf.csv")
+
+```
+
+
+
+
+Individual-level hypotheses (Conditioned on Source). The input files for these analyses comprise permuted REM datasets produced by permutation of TARGET labels only (Perm 2 - Independent permutation of SOURCE and TARGET labels) and subsequently processed in Eventnet 0.5.2
+
+ - Model 4: Relationship of task performance with individuals' prior experience of interacting with the task and number of task partners
+ 
+ - Model 6: Learning of task affordances (difference in interaction rates during task lockout vs non-lockout periods)
+
+```{r}
+setwd("C:\\Users\\Mike\\Documents\\DB_experiments\\ptests_perm2_CS_061220_EVout\\ptests_perm2_CS_061220")
+feed_files<-list.files(no..=TRUE)  #Get list of files within current directory
+coop_indicator<-unlist(sapply(feed_files,function(x) grepl("COOP_EVENTS",x)))   #Find file names containing "COOP_EVENTS" (Eventnet cooperation observations output)
+cond_files<-feed_files[coop_indicator]   #Filter list of all file names to just COOP_EVENTS files
+cond_list<-list()
+lock_list<-list()
+pred_list4<-list()
+pred_list6<-list()
+
+for(i in 1:length(cond_files))  #loop over files within subfolder
+{
+  print(i)
+  coop.events<-read.csv(cond_files[i],header=T,row.names=NULL)  #read in current Eventnet output file
+  coop.events$lock.bool<-as.numeric(unlist(apply(coop.events,1,function(x) context_clip[which(as.numeric(context_clip[,"TIME"]) %in% as.numeric(x["TIME"]))[1],"lock_bool"])))   #add task state info (lockout == 1, non-lockout == 0) for each event
+  coop.events$TIME<-rescale(coop.events$TIME)
+  coop.events$same_group<-apply(coop.events,1,function(x) if(as.numeric(x["source.is.groupA"])==as.numeric(x["target.is.groupA"])){1} else {0}) #Check the group assignments of each SOURCE and TARGET pair and create a binary indicator of whether the pair belonged to the same, or different, treatment groups
+  coop.events$target.coop.count<-coop.events$target.num.success + coop.events$target.num.fails   #Calculate total number of interactions engaged in by the TARGET
+  coop.events$target.degree<-coop.events$target.degree.success + coop.events$target.degree.failure   #Calculate overall (unweighted) degree
+  coop.events$event.indicator<-apply(coop.events,1,function(x) if(x["TYPE"]=="NON-EVENT"){0} else {1})   #Make sure that events (1) and non-events (0) have separate labels
+  my.surv.coop<-Surv(time = rep(1,dim(coop.events)[1]), event = coop.events$event.indicator)  #Create a survival object to serve as the response term in coxph
+  
+  
+  #Model 4:
+  tempw4<-tryCatch(perm.model.coop<-coxph(my.surv.coop ~ 
+                                same_group*(target.num.success + target.coop.count + target.degree.success + target.degree + target.solo.usage)
+                              + strata(TIME) 
+                              , data = coop.events),warning=function(w) return("W"))
+  
+  if(is.object(tempw4)){
+    cond_list[[i]]<-as.data.frame(t(tempw4$coefficients))
+    newdf4<-data.frame(same_group=c(rep(0,165),rep(1,165)),target.num.success=rep(c(0,5,10,15,20,25,30,35,40,45,50),30),target.coop.count=rep(50,330),target.degree.success=rep(c(rep(1,11),rep(2,11),rep(3,11),rep(4,11),rep(5,11),rep(6,11),rep(7,11),rep(8,11),rep(9,11),rep(10,11),rep(11,11),rep(12,11),rep(13,11),rep(14,11),rep(15,11)),2),target.degree=rep(15,330),target.solo.usage=rep(1000,330))
+    tempdf4<-cbind(newdf4,as.data.frame(predict(tempw4,newdata=newdf4,type="risk",reference="sample")))
+    colnames(tempdf4)[ncol(tempdf4)]<-"PRED_VAL"               
+    pred_list4[[i]]<-tempdf4
+  } else {
+    cond_list[[i]]<-NULL
+    pred_list4[[i]]<-NULL
+  }
+  
+  #Model 6:
+  tempw6<-tryCatch(perm.model.coop<-coxph(my.surv.coop ~ 
+                        lock.bool*target.coop.count + strata(TIME)
+                                          , data=coop.events),warning=function(w) return("W"))
+  
+  if(is.object(tempw6)){
+    lock_list[[i]]<-as.data.frame(t(tempw6$coefficients))
+    newdf6<-data.frame(lock.bool=c(rep(0,21),rep(1,21)),target.coop.count=rep(seq(0,100,5),2))
+    tempdf6<-cbind(newdf6,as.data.frame(predict(tempw6,newdata=newdf6,type="risk",reference="sample")))
+    colnames(tempdf6)[ncol(tempdf6)]<-"PRED_VAL" 
+    pred_list6[[i]]<-tempdf6
+  } else {
+    lock_list[[i]]<-NULL
+    pred_list6[[i]]<-NULL
+  }
+}
+
+cond_df_cs<-do.call(rbind,cond_list)  #Combine coefficients from each permuted REM for a given model type to get a single dataframe of pREM coefficients (with nrow == nperm)
+lock_df_cs<-do.call(rbind,lock_list)
+
+#Determine median coefficient value and 97.5% confidence interval from quantiles of pREM coefficient distribution. 97.5% CI used rather than 95% CI due to multiple testing (same hypotheses tested for both SOURCE and TARGET separately). As p-values are not being calculated, p-value thresholds are not adjusted to account for this (i.e. Bonferroni correction), rather this adjustment of confidence intervals is used to account for the multiple testing.
+
+quant_list4<-apply(cond_df_cs,2,function(x) data.frame(CI_LOW=quantile(x,probs=0.0125),MED=quantile(x,probs=0.5),CI_HIGH=quantile(x,probs=0.9875),MINIMUM=min(x),MAXIMUM=max(x),I.R.=exp(quantile(x,probs=0.5))))
+quant_df4<-do.call(rbind,quant_list4)
+write.csv(quant_df4,"cond_cs_quantdf.csv")
+
+quant_list6<-apply(lock_df_cs[,c("target.coop.count","lock.bool:target.coop.count")],2,function(x) data.frame(CI_LOW=quantile(x,probs=0.0125),MED=quantile(x,probs=0.5),CI_HIGH=quantile(x,probs=0.9875),MINIMUM=min(x),MAXIMUM=max(x),I.R.=exp(quantile(x,probs=0.5))))
+quant_df6<-do.call(rbind,quant_list6)
+write.csv(quant_df6,"lock_cs_quantdf.csv")
+
+```
+
+
+
+
+
+Individual-level hypotheses (Conditioned on Target). The input files for these analyses comprise permuted REM datasets produced by permutation of SOURCE labels only (Perm 2 - Independent permutation of SOURCE and TARGET labels) and subsequently processed in Eventnet 0.5.2 
+
+Code below is as above (for conditioned on SOURCE), except that the datasets were conditioned on TARGET instead of SOURCE.
+
+ - Model 5: Relationship of task performance with individuals' prior experience of interacting with the task and number of task partners
+ 
+ - Model 7: Learning of task affordances (difference in interaction rates during task lockout vs non-lockout periods)
+
+```{r}
+#Perm 2 - Individual-level hypotheses (Conditioned on Target)
+setwd("C:\\Users\\Mike\\Documents\\DB_experiments\\ptests_perm2_CT_061220_EVout\\ptests_perm2_CT_061220")
+feed_files<-list.files(no..=TRUE) #Get list of files within current directory
+coop_indicator<-unlist(sapply(feed_files,function(x) grepl("COOP_EVENTS",x)))  #Find file names containing "COOP_EVENTS" (Eventnet cooperation observations output)
+cond_files<-feed_files[coop_indicator]     #Filter list of all file names to just COOP_EVENTS files
+cond_list<-list()
+lock_list<-list()
+pred_list5<-list()
+pred_list7<-list()
+
+for(i in 1:length(cond_files))  #loop over files within subfolder
+{
+  print(i)
+  coop.events<-read.csv(cond_files[i],header=T,row.names=NULL)   #read in current Eventnet output file
+  coop.events$lock.bool<-as.numeric(unlist(apply(coop.events,1,function(x) context_clip[which(as.numeric(context_clip[,"TIME"]) %in% as.numeric(x["TIME"]))[1],"lock_bool"])))    #add task state info (lockout == 1, non-lockout == 0) for each event
+  coop.events$TIME<-rescale(coop.events$TIME)
+  coop.events$same_group<-apply(coop.events,1,function(x) if(as.numeric(x["source.is.groupA"])==as.numeric(x["target.is.groupA"])){1} else {0}) #Check the group assignments of each SOURCE and TARGET pair and create a binary indicator of whether the pair belonged to the same, or different, treatment groups
+  coop.events$source.coop.count<-coop.events$source.num.success + coop.events$source.num.fails     #Calculate total number of interactions engaged in by the SOURCE
+  coop.events$source.degree<-coop.events$source.degree.success + coop.events$source.degree.failure   #Calculate overall (unweighted) degree
+  coop.events$event.indicator<-apply(coop.events,1,function(x) if(x["TYPE"]=="NON-EVENT"){0} else {1}) #Make sure that events (1) and non-events (0) have separate labels
+  coop.events<-coop.events[order(coop.events$TIME),]
+  my.surv.coop<-Surv(time = rep(1,dim(coop.events)[1]), event = coop.events$event.indicator)  #Create a survival object to serve as the response term in coxph
+  
+  #Model 5:
+  tempw5<-tryCatch(perm.model.coop<-coxph(my.surv.coop ~ 
+                                  same_group*(source.num.success + source.coop.count + source.degree.success + source.degree + source.solo.usage)
+                                  + strata(TIME) 
+                                  , data = coop.events),warning=function(w) return("W"))
+  
+  if(is.object(tempw5)){
+    cond_list[[i]]<-as.data.frame(t(tempw5$coefficients))
+    newdf5<-data.frame(same_group=c(rep(0,165),rep(1,165)),source.num.success=rep(c(0,5,10,15,20,25,30,35,40,45,50),30),source.coop.count=rep(50,330),source.degree.success=rep(c(rep(1,11),rep(2,11),rep(3,11),rep(4,11),rep(5,11),rep(6,11),rep(7,11),rep(8,11),rep(9,11),rep(10,11),rep(11,11),rep(12,11),rep(13,11),rep(14,11),rep(15,11)),2),source.degree=rep(15,330),source.solo.usage=rep(1000,330))
+    tempdf5<-cbind(newdf5,as.data.frame(predict(tempw5,newdata=newdf5,type="risk",reference="sample")))
+    colnames(tempdf5)[ncol(tempdf5)]<-"PRED_VAL"  
+    pred_list5[[i]]<-tempdf5
+  } else {
+    cond_list[[i]]<-NULL
+    pred_list5[[i]]<-NULL
+  }
+  
+  #Model 7:
+  tempw7<-tryCatch(perm.model.coop<-coxph(my.surv.coop ~ 
+                                          lock.bool*source.coop.count
+                                          + strata(TIME) 
+                                          , data = coop.events),warning=function(w) return("W"))
+  
+  if(is.object(tempw7)){
+    lock_list[[i]]<-as.data.frame(t(tempw7$coefficients))
+    newdf7<-data.frame(lock.bool=c(rep(0,21),rep(1,21)),source.coop.count=rep(seq(0,100,5),2))
+    tempdf7<-cbind(newdf7,as.data.frame(predict(tempw7,newdata=newdf7,type="risk",reference="sample")))
+    colnames(tempdf7)[ncol(tempdf7)]<-"PRED_VAL" 
+    pred_list7[[i]]<-tempdf7
+  } else {
+    lock_list[[i]]<-NULL
+    pred_list7[[i]]<-NULL
+  }
+}
+
+cond_df_ct<-do.call(rbind,cond_list)  #Combine coefficients from each permuted REM for a given model type to get a single dataframe of pREM coefficients (with nrow == nperm)
+lock_df_ct<-do.call(rbind,lock_list)
+
+#Determine median coefficient value and 97.5% confidence interval from quantiles of pREM coefficient distribution. 97.5% CI used rather than 95% CI due to multiple testing (same hypotheses tested for both SOURCE and TARGET separately). As p-values are not being calculated, p-value thresholds are not adjusted to account for this (i.e. Bonferroni correction), rather this adjustment of confidence intervals is used to account for the multiple testing.
+
+quant_list5<-apply(cond_df_ct,2,function(x) data.frame(CI_LOW=quantile(x,probs=0.0125),MED=quantile(x,probs=0.5),CI_HIGH=quantile(x,probs=0.9875),MINIMUM=min(x),MAXIMUM=max(x),I.R.=exp(quantile(x,probs=0.5))))
+quant_df5<-do.call(rbind,quant_list5)
+write.csv(quant_df5,"cond_ct_quantdf.csv")
+
+quant_list7<-apply(lock_df_ct[,c("source.coop.count","lock.bool:source.coop.count")],2,function(x) data.frame(CI_LOW=quantile(x,probs=0.0125),MED=quantile(x,probs=0.5),CI_HIGH=quantile(x,probs=0.9875),MINIMUM=min(x),MAXIMUM=max(x),I.R.=exp(quantile(x,probs=0.5))))
+quant_df7<-do.call(rbind,quant_list7)
+write.csv(quant_df7,"lock_ct_quantdf.csv")
+
+
+```
+
+
+
+Model 8: Change in the probability of joining, as opposed to initiating, cooperation events with task experience.
+
+```{r}
+setwd("C:\\Users\\Mike\\Documents\\DB_experiments\\ptests_perm3_071220_EVout\\ptests_perm3_071220")
+feed_files<-list.files(no..=TRUE)  #Get list of files within current directory
+coop_indicator<-unlist(sapply(feed_files,function(x) grepl("COOP_EVENTS",x)))   #Find file names containing "COOP_EVENTS" (Eventnet cooperation observations output)
+coop_files<-feed_files[coop_indicator]   #Filter list of all file names to just COOP_EVENTS files
+coop_list<-list()
+pred_list8<-list()
+
+for(i in 1:length(coop_files))  #loop over files within subfolder
+{
+  print(i)
+  coop.events<-read.csv(coop_files[i],header=T,row.names=NULL)  #read in current Eventnet output file
+  coop.events$TIME<-rescale(coop.events$TIME)
+  coop.events$event.indicator<-apply(coop.events,1,function(x) if(x["TYPE"]=="NON-EVENT"){0} else {1})   #Make sure that events (1) and non-events (0) have separate labels
+  my.surv.coop<-Surv(time = rep(1,dim(coop.events)[1]), event = coop.events$event.indicator)  #Create a survival object to serve as the response term in coxph
+  
+  #Model 8:
+  tempw8<-tryCatch(perm.model.coop<-coxph(my.surv.coop ~ 
+                              source.num.starts + source.num.joins + target.num.starts + target.num.joins 
+                              + strata(TIME) 
+                              , data = coop.events),warning=function(w) return("W"))
+  
+  if(is.object(tempw8)){
+    coop_list[[i]]<-as.data.frame(t(tempw8$coefficients))
+    newdf8<-data.frame(source.num.starts=rep(seq(0,100,5),21),source.num.joins=rep(seq(100,0,-5),21),target.num.starts=c(rep(0,21),rep(5,21),rep(10,21),rep(15,21),rep(20,21),rep(25,21),rep(30,21),rep(35,21),rep(40,21),rep(45,21),rep(50,21),rep(55,21),rep(60,21),rep(65,21),rep(70,21),rep(75,21),rep(80,21),rep(85,21),rep(90,21),rep(95,21),rep(100,21)),target.num.joins=c(rep(100,21),rep(95,21),rep(90,21),rep(85,21),rep(80,21),rep(75,21),rep(70,21),rep(65,21),rep(60,21),rep(55,21),rep(50,21),rep(45,21),rep(40,21),rep(35,21),rep(30,21),rep(25,21),rep(20,21),rep(15,21),rep(10,21),rep(5,21),rep(0,21)))
+    tempdf8<-cbind(newdf8,as.data.frame(predict(tempw8,newdata=newdf8,type="risk",reference="sample")))
+    colnames(tempdf8)[ncol(tempdf8)]<-"PRED_VAL"  
+    pred_list8[[i]]<-tempdf8
+  } else {
+    coop_list[[i]]<-NULL
+    pred_list8[[i]]<-NULL
+  }
+  
+
+}
+
+coop_df<-do.call(rbind,coop_list)  #Combine coefficients from each permuted REM for a given model type to get a single dataframe of pREM coefficients (with nrow == nperm)
+
+#Determine median coefficient value and 95% confidence interval from quantiles of pREM coefficient distribution. 
+
+quant_list8<-apply(coop_df,2,function(x) data.frame(CI_LOW=quantile(x,probs=0.025),MED=quantile(x,probs=0.5),CI_HIGH=quantile(x,probs=0.975),MINIMUM=min(x),MAXIMUM=max(x),I.R.=exp(quantile(x,probs=0.5))))
+quant_df8<-do.call(rbind,quant_list8)
+write.csv(quant_df8,"model8_quantdf.csv")
+
+
+
+```
+
+
+Tests for change in coordination of dyads (duration of events and arrival latencies). The input files for these analyses comprise permuted REM datasets produced by permutation of edge weights or arrival latencies only (Perm 4 - shuffle edge weights only (i.e. without altering the underlying network structure)) and subsequently processed in Eventnet 0.5.2 
+
+ - Model 9: Change in event duration of dyads attributable to properties of dyads (number of previous events, same/diff treatment group, affiliated/not-affiliated) 
+ 
+```{r}
+setwd("C:\\Users\\Mike\\Documents\\DB_experiments\\ptests_perm4_091220_WEIGHT_EVout\\ptests_perm4_091220_WEIGHT")     #event duration datasets (Model 9)
+feed_files<-list.files(no..=TRUE) #Get list of files within current directory
+coop_indicator<-unlist(sapply(feed_files,function(x) grepl("COOP_EVENTS",x)))
+coop_files<-feed_files[coop_indicator]
+coef_list<-list()
+pred_list9<-list()
+
+#Note, this same code block needs to be run for either type of analysis (event duration or arrival latency), the only difference being the directory from which the Eventnet output files are pulled. Also note, both event duration and arrival latencies are stored in the WEIGHT column in their respective dataframes. 
+
+for(i in 1:length(coop_files))  #loop over files within subfolder
+{
+  print(i)
+  coop.events.cdn<-read.csv(coop_files[i],header=T,row.names=NULL)
+  coop.events.cdn$same_group<-apply(coop.events.cdn,1,function(x)  if(as.numeric(x["source.is.groupA"])==as.numeric(x["target.is.groupA"])){1} else {0}) #Check the group assignments of each SOURCE and TARGET pair and create a binary indicator of whether the pair belonged to the same, or different, treatment groups.
+  coop.events.cdn$dyad.coop.count<-coop.events.cdn$dyad.success.count +   coop.events.cdn$dyad.fail.count
+  coop.events.cdn$dyad.coop.cat<-sapply(as.numeric(coop.events.cdn$dyad.coop.count),function(x) if(x<1){"ARE_UNFAMILIAR"} else if(x>0 && x<6){"FAMILIAR_1TO5"} else {"FAMILIAR_6PLUS"})     #Split count of dyadic cooperation events into three categories (ARE_UNFAMILIAR = dyad has not had a previous event; FAMILIAR_1TO5 = dyad has had between one and five previous events; FAMILIAR_6PLUS = dyad has had six or more previous events)
+  coop.events.cdn$is.affiliate<-sapply(coop.events.cdn$is.affiliate,function(x) if(x>0){1} else{0})
+  cdn.list<-lapply(split(coop.events.cdn,coop.events.cdn$EVENT_INTERVAL),function(x) if(length(unique(x$EVENT))==2 & length(unique(x$TYPE))==2 & !sum(is.na(x$WEIGHT))){x} else {NULL})
+  cdn.final<-do.call(rbind,cdn.list)
+  cdn.final$event.indicator<-apply(cdn.final,1,function(x) if(x["TYPE"]=="NON-EVENT"){0} else {1})   #Make sure that events (1) and non-events (0) have separate labels
+  my.surv.cdn<-Surv(time = rep(1,dim(cdn.final)[1]), event = cdn.final$event.indicator)  #Create a survival object to serve as the response term in coxph
+  
+  tempw9<-tryCatch(perm.coord<-coxph(my.surv.cdn ~ 
+                                             WEIGHT*(is.affiliate + same_group + dyad.coop.cat)
+                                              + strata(TIME) 
+                                             , data = cdn.final),warning=function(w) return("W"))
+  
+  if(is.object(tempw9)){
+    coef_list[[i]]<-as.data.frame(t(tempw9$coefficients))
+    newdf9<-data.frame(is.affiliate=rep(c(0,1,0,1),21),same_group=rep(c(0,0,1,1),21),dyad.coop.cat=rep(c("ARE_UNFAMILIAR","ARE_UNFAMILIAR","ARE_UNFAMILIAR","ARE_UNFAMILIAR","FAMILIAR_1TO5","FAMILIAR_1TO5","FAMILIAR_1TO5","FAMILIAR_1TO5","FAMILIAR_6PLUS","FAMILIAR_6PLUS","FAMILIAR_6PLUS","FAMILIAR_6PLUS"),7),WEIGHT=c(rep(1,12),rep(5,12),rep(10,12),rep(15,12),rep(20,12),rep(25,12),rep(30,12))) 
+    tempdf9<-cbind(newdf9,as.data.frame(predict(tempw9,newdata=newdf9,type="risk",reference="sample")))
+    colnames(tempdf9)[ncol(tempdf9)]<-"PRED_VAL"  
+    pred_list9[[i]]<-tempdf9
+  } else {
+    coef_list[[i]]<-NULL
+    pred_list9[[i]]<-NULL
+  }
+}
+
+coef_df<-do.call(rbind,coef_list)
+
+quant_list9<-apply(coef_df[,c("WEIGHT","WEIGHT:is.affiliate","WEIGHT:same_group","WEIGHT:dyad.coop.catFAMILIAR_1TO5","WEIGHT:dyad.coop.catFAMILIAR_6PLUS")],2,function(x) data.frame(CI_LOW=quantile(x,probs=0.025),MED=quantile(x,probs=0.5),CI_HIGH=quantile(x,probs=0.975),MINIMUM=min(x),MAXIMUM=max(x),I.R.=exp(quantile(x,probs=0.5))))
+quant_df9<-do.call(rbind,quant_list9)
+write.csv(quant_df9,"model9_quantdf.csv")
+
+```
+
+Model 10: Change in arrival latency (latency between arrival of SOURCE and TARGET preceeding a cooperation event) attributable to properties of dyads (number of previous events, same/diff treatment group, affiliated/not-affiliated) 
+
+```{r}
+setwd("C:\\Users\\Mike\\Documents\\DB_experiments\\ptests_perm4_101220_PREDUR_EVout3\\ptests_perm4_101220_PREDUR")   #arrival latency datasets (Model 10)
+feed_files<-list.files(no..=TRUE) #Get list of files within current directory
+coop_indicator<-unlist(sapply(feed_files,function(x) grepl("COOP_EVENTS",x)))
+coop_files<-feed_files[coop_indicator]
+coef_list<-list()
+pred_list10<-list()
+
+#Note, this same code block needs to be run for either type of analysis (event duration or arrival latency), the only difference being the directory from which the Eventnet output files are pulled. Also note, both event duration and arrival latencies are stored in the WEIGHT column in their respective dataframes. 
+
+
+for(i in 1:length(coop_files))  #loop over files within subfolder
+{
+  print(i)
+  coop.events.cdn<-read.csv(coop_files[i],header=T,row.names=NULL)
+  temp_groupdf<-covars[covars$TYPE=="IS_GROUP_A",]
+  coop.events.cdn$same_group<-apply(coop.events.cdn,1,function(x) if(temp_groupdf[match(x["SOURCE"],temp_groupdf$SOURCE),"WEIGHT"]==temp_groupdf[match(x["TARGET"],temp_groupdf$TARGET),"WEIGHT"]) {1} else {0})  #Check the group assignments of each SOURCE and TARGET pair and create a binary indicator of whether the pair belonged to the same, or different, treatment groups.
+  temp_affildf<-covars[covars$TYPE %in% c("PARTNER","SIBLING","PARENT-OFFSPRING"),]
+  temp_affildf$checkcol<-apply(temp_affildf,1,function(x) paste(toString(x["SOURCE"]),toString(x["TARGET"]),sep="-"))
+  coop.events.cdn$is.affiliate<-apply(coop.events.cdn,1,function(x) if(paste(toString(x["SOURCE"]),toString(x["TARGET"]),sep="-") %in% temp_affildf$checkcol){1} else {0})
+  coop.events.cdn$dyad.coop.count<-coop.events.cdn$dyad.success.count +   coop.events.cdn$dyad.fail.count
+  coop.events.cdn$dyad.coop.cat<-sapply(as.numeric(coop.events.cdn$dyad.coop.count),function(x) if(x<1){"ARE_UNFAMILIAR"} else if(x>0 && x<6){"FAMILIAR_1TO5"} else {"FAMILIAR_6PLUS"})     #Split count of dyadic cooperation events into three categories (ARE_UNFAMILIAR = dyad has not had a previous event; FAMILIAR_1TO5 = dyad has had between one and five previous events; FAMILIAR_6PLUS = dyad has had six or more previous events)
+  coop.events.cdn$is.affiliate<-sapply(coop.events.cdn$is.affiliate,function(x) if(x>0){1} else{0})
+  cdn.list<-lapply(split(coop.events.cdn,coop.events.cdn$EVENT_INTERVAL),function(x) if(length(unique(x$EVENT))==2 & length(unique(x$TYPE))==2 & !sum(is.na(x$WEIGHT))){x} else {NULL})
+  cdn.final<-do.call(rbind,cdn.list)
+  cdn.final$event.indicator<-apply(cdn.final,1,function(x) if(x["TYPE"]=="NON-EVENT"){0} else {1})   #Make sure that events (1) and non-events (0) have separate labels
+  my.surv.cdn<-Surv(time = rep(1,dim(cdn.final)[1]), event = cdn.final$event.indicator)  #Create a survival object to serve as the response term in coxph
+  
+  tempw10<-tryCatch(perm.coord<-coxph(my.surv.cdn ~ 
+                                             WEIGHT*(is.affiliate + same_group + dyad.coop.cat)
+                                              + strata(TIME) 
+                                             , data = cdn.final),warning=function(w) return("W"))
+  
+  if(is.object(tempw10)){
+    coef_list[[i]]<-as.data.frame(t(tempw10$coefficients))
+    newdf10<-data.frame(is.affiliate=rep(c(0,1,0,1),21),same_group=rep(c(0,0,1,1),21),dyad.coop.cat=rep(c("ARE_UNFAMILIAR","ARE_UNFAMILIAR","ARE_UNFAMILIAR","ARE_UNFAMILIAR","FAMILIAR_1TO5","FAMILIAR_1TO5","FAMILIAR_1TO5","FAMILIAR_1TO5","FAMILIAR_6PLUS","FAMILIAR_6PLUS","FAMILIAR_6PLUS","FAMILIAR_6PLUS"),7),WEIGHT=c(rep(1,12),rep(5,12),rep(10,12),rep(15,12),rep(20,12),rep(25,12),rep(30,12))) 
+    tempdf10<-cbind(newdf10,as.data.frame(predict(tempw10,newdata=newdf10,type="risk",reference="sample")))
+    colnames(tempdf10)[ncol(tempdf10)]<-"PRED_VAL"  
+    pred_list10[[i]]<-tempdf10
+  } else {
+    coef_list[[i]]<-NULL
+    pred_list10[[i]]<-NULL
+  }
+}
+
+coef_df<-do.call(rbind,coef_list)
+
+quant_list10<-apply(coef_df[,c("WEIGHT","WEIGHT:is.affiliate","WEIGHT:same_group","WEIGHT:dyad.coop.catFAMILIAR_1TO5","WEIGHT:dyad.coop.catFAMILIAR_6PLUS")],2,function(x) data.frame(CI_LOW=quantile(x,probs=0.025),MED=quantile(x,probs=0.5),CI_HIGH=quantile(x,probs=0.975),MINIMUM=min(x),MAXIMUM=max(x),I.R.=exp(quantile(x,probs=0.5))))
+quant_df10<-do.call(rbind,quant_list10)
+write.csv(quant_df10,"model10_quantdf.csv")
+```
+Plotting
+
+```{r}
+library(Cairo)
+library(ggplot2)
+
+#Model 1
+load("~/DB_experiments/Files for publication/Data/pred_list1_311220.RData")
+
+pv_list1<-lapply(pred_list1,function(x) data.frame(t(data.frame(x$PRED_VAL))))
+pv_df1<-do.call(rbind,pv_list1)
+PI_LOW1<-apply(pv_df1,2,function(x) quantile(x,probs=0.025))
+MED_VAL1<-apply(pv_df1,2,function(x) quantile(x,probs=0.5))
+PI_HIGH1<-apply(pv_df1,2,function(x) quantile(x,probs=0.975))
+plot_df1<-pred_list1[[1]][,c("is.affiliate","same_group","dyad.coop.cat")]
+plot_df1<-cbind(plot_df1,PI_LOW=PI_LOW1,MED_VAL=MED_VAL1,PI_HIGH=PI_HIGH1)
+pdaffil1<-plot_df1[plot_df1$is.affiliate==1,]
+pdnonaffil1<-plot_df1[plot_df1$is.affiliate==0,]
+
+ggplot(pdaffil1,aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+ggplot(pdnonaffil1,aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+
+#Model 2
+load("~/DB_experiments/Files for publication/Data/pred_list2_311220.RData")
+
+pv_list2<-lapply(pred_list2,function(x) data.frame(t(data.frame(x$PRED_VAL))))
+pv_df2<-do.call(rbind,pv_list2)
+PI_LOW2<-apply(pv_df2,2,function(x) quantile(x,probs=0.025))
+MED_VAL2<-apply(pv_df2,2,function(x) quantile(x,probs=0.5))
+PI_HIGH2<-apply(pv_df2,2,function(x) quantile(x,probs=0.975))
+plot_df2<-pred_list2[[1]][,c("is.affiliate","same_group","dyad.has.previous","network.num.coop","TIME")]
+plot_df2<-cbind(plot_df2,PI_LOW=PI_LOW2,MED_VAL=MED_VAL2,PI_HIGH=PI_HIGH2)
+dhp0_af_s<-plot_df2[which(plot_df2$is.affiliate==1 & plot_df2$dyad.has.previous==0 & plot_df2$same_group==1),]
+dhp0_af_d<-plot_df2[which(plot_df2$is.affiliate==1 & plot_df2$dyad.has.previous==0 & plot_df2$same_group==0),]
+dhp0_naf_s<-plot_df2[which(plot_df2$is.affiliate==0 & plot_df2$dyad.has.previous==0 & plot_df2$same_group==1),]
+dhp0_naf_d<-plot_df2[which(plot_df2$is.affiliate==0 & plot_df2$dyad.has.previous==0 & plot_df2$same_group==0),]
+dhp1_af_s<-plot_df2[which(plot_df2$is.affiliate==1 & plot_df2$dyad.has.previous==1 & plot_df2$same_group==1),]
+dhp1_af_d<-plot_df2[which(plot_df2$is.affiliate==1 & plot_df2$dyad.has.previous==1 & plot_df2$same_group==0),]
+dhp1_naf_s<-plot_df2[which(plot_df2$is.affiliate==0 & plot_df2$dyad.has.previous==1 & plot_df2$same_group==1),]
+dhp1_naf_d<-plot_df2[which(plot_df2$is.affiliate==0 & plot_df2$dyad.has.previous==1 & plot_df2$same_group==0),]
+
+ggplot() + geom_smooth(data=dhp0_naf_s,aes(TIME,MED_VAL),method="gam",colour="red",se=FALSE) + geom_smooth(data=dhp0_naf_d,aes(TIME,MED_VAL),method="gam",colour="blue",se=FALSE) + geom_smooth(data=dhp0_naf_s,aes(TIME,PI_LOW),method="gam",colour="red",se=FALSE,lty=2) + geom_smooth(data=dhp0_naf_d,aes(TIME,PI_LOW),method="gam",colour="blue",se=FALSE,lty=2) + geom_smooth(data=dhp0_naf_s,aes(TIME,PI_HIGH),method="gam",colour="red",se=FALSE,lty=2) + geom_smooth(data=dhp0_naf_d,aes(TIME,PI_HIGH),method="gam",colour="blue",se=FALSE,lty=2) + theme_classic() + ylim(0,2)
+
+ggplot() + geom_smooth(data=dhp1_naf_s,aes(TIME,MED_VAL),method="gam",colour="red",se=FALSE) + geom_smooth(data=dhp1_naf_d,aes(TIME,MED_VAL),method="gam",colour="blue",se=FALSE) + geom_smooth(data=dhp1_naf_s,aes(TIME,PI_LOW),method="gam",colour="red",se=FALSE,lty=2) + geom_smooth(data=dhp1_naf_d,aes(TIME,PI_LOW),method="gam",colour="blue",se=FALSE,lty=2) + geom_smooth(data=dhp1_naf_s,aes(TIME,PI_HIGH),method="gam",colour="red",se=FALSE,lty=2) + geom_smooth(data=dhp1_naf_d,aes(TIME,PI_HIGH),method="gam",colour="blue",se=FALSE,lty=2) + theme_classic() + ylim(0,3)
+
+ggplot() + geom_smooth(data=dhp0_af_s,aes(TIME,MED_VAL),method="gam",colour="red",se=FALSE) + geom_smooth(data=dhp0_af_d,aes(TIME,MED_VAL),method="gam",colour="blue",se=FALSE) + geom_smooth(data=dhp0_af_s,aes(TIME,PI_LOW),method="gam",colour="red",se=FALSE,lty=2) + geom_smooth(data=dhp0_af_d,aes(TIME,PI_LOW),method="gam",colour="blue",se=FALSE,lty=2) + geom_smooth(data=dhp0_af_s,aes(TIME,PI_HIGH),method="gam",colour="red",se=FALSE,lty=2) + geom_smooth(data=dhp0_af_d,aes(TIME,PI_HIGH),method="gam",colour="blue",se=FALSE,lty=2) + theme_classic() + ylim(0,5)
+
+ggplot() + geom_smooth(data=dhp1_af_s,aes(TIME,MED_VAL),method="gam",colour="red",se=FALSE) + geom_smooth(data=dhp1_af_d,aes(TIME,MED_VAL),method="gam",colour="blue",se=FALSE) + geom_smooth(data=dhp1_af_s,aes(TIME,PI_LOW),method="gam",colour="red",se=FALSE,lty=2) + geom_smooth(data=dhp1_af_d,aes(TIME,PI_LOW),method="gam",colour="blue",se=FALSE,lty=2) + geom_smooth(data=dhp1_af_s,aes(TIME,PI_HIGH),method="gam",colour="red",se=FALSE,lty=2) + geom_smooth(data=dhp1_af_d,aes(TIME,PI_HIGH),method="gam",colour="blue",se=FALSE,lty=2) + theme_classic() + ylim(0,5)
+
+
+#Model 3
+load("~/DB_experiments/Files for publication/Data/pred_list3_311220.RData")
+
+pv_list3<-lapply(pred_list3,function(x) data.frame(t(data.frame(x$PRED_VAL))))
+pv_df3<-do.call(rbind,pv_list3)
+PI_LOW3<-apply(pv_df3,2,function(x) quantile(x,probs=0.025))
+MED_VAL3<-apply(pv_df3,2,function(x) quantile(x,probs=0.5))
+PI_HIGH3<-apply(pv_df3,2,function(x) quantile(x,probs=0.975))
+plot_df3<-pred_list3[[1]][,c("network.num.coop","triadic.closure.coop","success.closure","TIME")]
+plot_df3<-cbind(plot_df3,PI_LOW=PI_LOW3,MED_VAL=MED_VAL3,PI_HIGH=PI_HIGH3)
+pdf3_s<-plot_df3[plot_df3[,"success.closure"]==1,]
+pdf3_d<-plot_df3[plot_df3[,"success.closure"]==0,]
+
+ggplot() + geom_smooth(data=pdf3_s,aes(TIME,MED_VAL),method="gam",colour="red",se=FALSE) + geom_smooth(data=pdf3_d,aes(TIME,MED_VAL),method="gam",colour="blue",se=FALSE) + geom_smooth(data=pdf3_s,aes(TIME,PI_LOW),method="gam",colour="red",se=FALSE,lty=2) + geom_smooth(data=pdf3_d,aes(TIME,PI_LOW),method="gam",colour="blue",se=FALSE,lty=2) + geom_smooth(data=pdf3_s,aes(TIME,PI_HIGH),method="gam",colour="red",se=FALSE,lty=2) + geom_smooth(data=pdf3_d,aes(TIME,PI_HIGH),method="gam",colour="blue",se=FALSE,lty=2) + theme_classic() + ylim(0,5)
+
+
+#Model 4
+load("~/DB_experiments/Files for publication/Data/pred_list4.RData")
+
+pv_list4<-lapply(pred_list4,function(x) data.frame(t(data.frame(x$PRED_VAL))))
+pv_df4<-do.call(rbind,pv_list4)
+PI_LOW4<-apply(pv_df4,2,function(x) quantile(x,probs=0.0125))
+MED_VAL4<-apply(pv_df4,2,function(x) quantile(x,probs=0.5))
+PI_HIGH4<-apply(pv_df4,2,function(x) quantile(x,probs=0.9875))
+plot_df4<-pred_list4[[1]][,c("same_group","target.num.success","target.coop.count","target.degree.success","target.degree","target.solo.usage")]
+plot_df4<-cbind(plot_df4,PI_LOW=PI_LOW4,MED_VAL=MED_VAL4,PI_HIGH=PI_HIGH4)
+plot_df4$PERC_sdeg<-apply(plot_df4,1,function(x) x["target.degree.success"]/x["target.degree"])
+plot_df4$PERC_correct<-apply(plot_df4,1,function(x) x["target.num.success"]/x["target.coop.count"])
+
+pldf_s<-plot_df4[plot_df4$same_group==1,]
+pldf_d<-plot_df4[plot_df4$same_group==0,]
+
+
+ggplot(plot_df4,aes(PERC_sdeg,PERC_correct)) + geom_tile(aes(fill=MED_VAL),colour="white") + scale_fill_gradient(low="white",high="red") 
+
+
+#Model 5
+
+
+#Model 6
+load("~/DB_experiments/Files for publication/Data/pred_list6.RData")
+
+pv_list6<-lapply(pred_list6,function(x) data.frame(t(data.frame(x$PRED_VAL))))
+pv_df6<-do.call(rbind,pv_list6)
+PI_LOW6<-apply(pv_df6,2,function(x) quantile(x,probs=0.0125))
+MED_VAL6<-apply(pv_df6,2,function(x) quantile(x,probs=0.5))
+PI_HIGH6<-apply(pv_df6,2,function(x) quantile(x,probs=0.9875))
+plot_df6<-pred_list6[[1]][,c("lock.bool","target.coop.count")]
+plot_df6<-cbind(plot_df6,PI_LOW=PI_LOW6,MED_VAL=MED_VAL6,PI_HIGH=PI_HIGH6)
+plot_df6<-plot_df6[plot_df6$target.coop.count<=50,]
+plot_df6_l1<-plot_df6[plot_df6$lock.bool==1,]
+plot_df6_l0<-plot_df6[plot_df6$lock.bool==0,]
+
+ggplot() + geom_line(data=plot_df6_l0,aes(target.coop.count,MED_VAL),colour="red") + geom_line(data=plot_df6_l1,aes(target.coop.count,MED_VAL),colour="blue") + geom_ribbon(data=plot_df6_l0,aes(target.coop.count,ymin=PI_LOW,ymax=PI_HIGH),fill="red",alpha=0.25) + geom_ribbon(data=plot_df6_l1,aes(target.coop.count,ymin=PI_LOW,ymax=PI_HIGH),fill="blue",alpha=0.25) + theme_classic()
+
+
+#Model 7
+load("~/DB_experiments/Files for publication/Data/pred_list7.RData")
+
+pv_list7<-lapply(pred_list7,function(x) data.frame(t(data.frame(x$PRED_VAL))))
+pv_df7<-do.call(rbind,pv_list7)
+PI_LOW7<-apply(pv_df7,2,function(x) quantile(x,probs=0.0125))
+MED_VAL7<-apply(pv_df7,2,function(x) quantile(x,probs=0.5))
+PI_HIGH7<-apply(pv_df7,2,function(x) quantile(x,probs=0.9875))
+plot_df7<-pred_list7[[1]][,c("lock.bool","source.coop.count")]
+plot_df7<-cbind(plot_df7,PI_LOW=PI_LOW7,MED_VAL=MED_VAL7,PI_HIGH=PI_HIGH7)
+plot_df7<-plot_df7[plot_df7$source.coop.count<=50,]
+plot_df7_l1<-plot_df7[plot_df7$lock.bool==1,]
+plot_df7_l0<-plot_df7[plot_df7$lock.bool==0,]
+
+ggplot() + geom_line(data=plot_df7_l0,aes(source.coop.count,MED_VAL),colour="red") + geom_line(data=plot_df7_l1,aes(source.coop.count,MED_VAL),colour="blue") + geom_ribbon(data=plot_df7_l0,aes(source.coop.count,ymin=PI_LOW,ymax=PI_HIGH),fill="red",alpha=0.25) + geom_ribbon(data=plot_df7_l1,aes(source.coop.count,ymin=PI_LOW,ymax=PI_HIGH),fill="blue",alpha=0.25) + theme_classic()
+
+
+#Model 8
+
+
+#Model 9
+load("~/DB_experiments/Files for publication/Data/pred_list9.RData")
+
+pv_list9<-lapply(pred_list9,function(x) data.frame(t(data.frame(x$PRED_VAL))))
+pv_df9<-do.call(rbind,pv_list9)
+PI_LOW9<-apply(pv_df9,2,function(x) quantile(x,probs=0.025))
+MED_VAL9<-apply(pv_df9,2,function(x) quantile(x,probs=0.5))
+PI_HIGH9<-apply(pv_df9,2,function(x) quantile(x,probs=0.975))
+plot_df9<-pred_list9[[1]][,c("is.affiliate","same_group","dyad.coop.cat","WEIGHT")]
+plot_df9<-cbind(plot_df9,PI_LOW=PI_LOW9,MED_VAL=MED_VAL9,PI_HIGH=PI_HIGH9)
+w_list<-split(plot_df9,plot_df9$WEIGHT)
+
+#weight==1
+ggplot(w_list[[1]][w_list[[1]]$is.affiliate==0,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+ggplot(w_list[[1]][w_list[[1]]$is.affiliate==1,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+#weight==5
+ggplot(w_list[[2]][w_list[[2]]$is.affiliate==0,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+ggplot(w_list[[2]][w_list[[2]]$is.affiliate==1,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+#weight==10
+ggplot(w_list[[3]][w_list[[3]]$is.affiliate==0,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+ggplot(w_list[[3]][w_list[[3]]$is.affiliate==1,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+#weight==15
+ggplot(w_list[[4]][w_list[[4]]$is.affiliate==0,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+ggplot(w_list[[4]][w_list[[4]]$is.affiliate==1,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+#weight==20
+ggplot(w_list[[5]][w_list[[5]]$is.affiliate==0,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+ggplot(w_list[[5]][w_list[[5]]$is.affiliate==1,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+#weight==25
+ggplot(w_list[[6]][w_list[[6]]$is.affiliate==0,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+ggplot(w_list[[6]][w_list[[6]]$is.affiliate==1,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+#weight==30
+ggplot(w_list[[7]][w_list[[7]]$is.affiliate==0,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+ggplot(w_list[[7]][w_list[[7]]$is.affiliate==1,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+
+
+#Model 10
+load("~/DB_experiments/Files for publication/Data/pred_list10.RData")
+
+pv_list10<-lapply(pred_list10,function(x) data.frame(t(data.frame(x$PRED_VAL))))
+pv_df10<-do.call(rbind,pv_list10)
+PI_LOW10<-apply(pv_df10,2,function(x) quantile(x,probs=0.025))
+MED_VAL10<-apply(pv_df10,2,function(x) quantile(x,probs=0.5))
+PI_HIGH10<-apply(pv_df10,2,function(x) quantile(x,probs=0.975))
+plot_df10<-pred_list10[[1]][,c("is.affiliate","same_group","dyad.coop.cat","WEIGHT")]
+plot_df10<-cbind(plot_df10,PI_LOW=PI_LOW10,MED_VAL=MED_VAL10,PI_HIGH=PI_HIGH10)
+w_list<-split(plot_df10,plot_df10$WEIGHT)   #Note, weight here means arrival latency ('PRE_DUR')
+
+#weight==1
+ggplot(w_list[[1]][w_list[[1]]$is.affiliate==0,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+ggplot(w_list[[1]][w_list[[1]]$is.affiliate==1,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+#weight==5
+ggplot(w_list[[2]][w_list[[2]]$is.affiliate==0,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+ggplot(w_list[[2]][w_list[[2]]$is.affiliate==1,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+#weight==10
+ggplot(w_list[[3]][w_list[[3]]$is.affiliate==0,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+ggplot(w_list[[3]][w_list[[3]]$is.affiliate==1,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+#weight==15
+ggplot(w_list[[4]][w_list[[4]]$is.affiliate==0,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+ggplot(w_list[[4]][w_list[[4]]$is.affiliate==1,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+#weight==20
+ggplot(w_list[[5]][w_list[[5]]$is.affiliate==0,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+ggplot(w_list[[5]][w_list[[5]]$is.affiliate==1,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+#weight==25
+ggplot(w_list[[6]][w_list[[6]]$is.affiliate==0,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+ggplot(w_list[[6]][w_list[[6]]$is.affiliate==1,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+#weight==30
+ggplot(w_list[[7]][w_list[[7]]$is.affiliate==0,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+ggplot(w_list[[7]][w_list[[7]]$is.affiliate==1,],aes(dyad.coop.cat,MED_VAL,colour=same_group)) + geom_errorbar(aes(ymin=PI_LOW,ymax=PI_HIGH)) + geom_point() + theme_classic() 
+
+
+
+
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
