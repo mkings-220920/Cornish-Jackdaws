@@ -1,2 +1,2 @@
 # Cornish-Jackdaws
-Data, code, figures and manuscripts from my time as part of the Cornish Jackdaw Project
+Data, code, manuscripts and documentation pertaining to the paper: "Selective adjustment of social associations and its influence on social networks in wild corvids".
