@@ -1,2 +1,2 @@
 # Cornish-Jackdaws
-All of the data, code, figures and manuscripts relating to the work I undertook whilst part of the Cornish Jackdaw Project
+Data, code, figures and manuscripts from my time as part of the Cornish Jackdaw Project
