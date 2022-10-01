@@ -1,1 +1,7 @@
-
+- Raw RFID data files available in the Data.zip folder.
+- 'DB_REM_INPUT' is the processed data (i.e. the output of the MK_processing script as applied to the raw data files). DB_REM_INPUT is the input for the permutation script (MK_permutations.R).
+- The structure and content of 'DB_REM_INPUT' is summarized in the 'REM dataset structure and content' word document.
+- 'Eventnet_configuration' is the configuration file used in Eventnet 0.5.2
+- NOTE, due to storage constraints the permuted datasets (output of MK_permutations) and the eventnet output (permuted datasets with time-varying covariates) are not given here.
+- 'Food Preference Data' is the data pertaining to the food preference test (see Supplementary Results in Supplementary Material).
+- The REM output folder contains model output (coefficients and predicted values) - this is the output from the MK_REMs script. See README in REM_output folder for further details.
