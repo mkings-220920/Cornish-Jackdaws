@@ -1,1 +1,5 @@
-
+- dualfeeder.c is the C code used to program the 'Darwin Board' microcomputers.
+- The above code is summarized in the 'Darwin Board dual feeder task pseudocode' word document.
+- 'Feedexp_trtmnt_assign2019.R' is the R script that was used for treatment class assignment.
+- 
+- Two text files are given. These files contain the finalized treatment class assignments. Each text file contains the RFID codes of each individual assigned to that particular class. These text files were stored on microSD cards utilized by the Darwin Boards. The RFID code of an individual occupying the feeding perch at a particular time was compared to the codes in each of these files to identify an individual's treatment class.
