@@ -2,3 +2,4 @@
 - The 'Main scripts' folder contains the three primary R scripts used for analysis. All three are given as annotated RMarkdown documents. 
 - The 'Modelling functions' folder contains functions utilized by the MK_REMs script (see 'Main scripts').
 - The 'Processing functions' folder contains functions utilized by the MK_processing script (see 'Main scripts').
+- The 'Treatment class assignment' folder contains the script used for initial class assignments (prior to commencement of the experiment) and accompanying data files.
