@@ -5,3 +5,4 @@
 - NOTE, due to storage constraints the permuted datasets (output of MK_permutations) and the eventnet output (permuted datasets with time-varying covariates) are not given here.
 - 'Food Preference Data' is the data pertaining to the food preference test (see Supplementary Results in Supplementary Material).
 - The REM output folder contains model output (coefficients and predicted values) - this is the output from the MK_REMs script. See README in REM_output folder for further details.
+- Text files and .csv files pertaining to initial treatment class assignments (prior to commencement of experiment) are given along with the accompanying script in the 'Treatment class assignment' folder in 'Code'.
