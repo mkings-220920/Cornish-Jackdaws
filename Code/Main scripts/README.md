@@ -1,3 +1,3 @@
-- MK_processing.R is the script used for processing the raw 'Darwin Board' output files from each day of data collection into a single processed dataset for use in Eventnet. An explanation of the processing steps in each section of this script is given in 
+- MK_processing.R is the script used for processing the raw 'Darwin Board' output files from each day of data collection into a single processed dataset for use in Eventnet. An explanation of the processing steps in each section of this script is given in the 'RFID data processing script pseudocode' word document.
 - MK_permutations.R takes the above processed dataset and produces datasets containing permuted data ('non-events').
 - MK_REMS.R fits REMs to the datasets output by Eventnet.
