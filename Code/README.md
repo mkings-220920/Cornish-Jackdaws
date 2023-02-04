@@ -1,4 +1,4 @@
-- The 'Darwin Board' folder contains the code used to program the Darwin Board microcomputers.
+- The 'Darwin Board' folder contains the code used to program the 'Darwin Board' microcomputers.
 - The 'Main scripts' folder contains the three primary R scripts used for analysis. All three are given as annotated RMarkdown documents. 
 - The 'Modelling functions' folder contains functions utilized by the MK_REMs script (see 'Main scripts').
 - The 'Processing functions' folder contains functions utilized by the MK_processing script (see 'Main scripts').
