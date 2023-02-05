@@ -1,2 +1,2 @@
 - FeedExp_pairs100419.csv contains the relevant life-history information for all known individuals (i.e. jackdaws that were ringed or identified as a nest-box owner). 
-
+- is the code used to randomly assign individuals to treatment classes. 
