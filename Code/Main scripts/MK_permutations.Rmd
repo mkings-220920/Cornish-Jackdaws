@@ -21,7 +21,7 @@ coop_only<-REM_input[REM_input$TYPE %in% c("COOP_SUCCESS","COOP_FAIL"),]        
 
 
 
-Permutation procedure (Type 1; see Extended Data Figure 6a) - shuffle SOURCE and TARGET labels non-independently (i.e. SOURCE labels can become TARGET labels and vice versa)
+Permutation procedure (Type 1; see Supplementary Fig. 3a) - shuffle SOURCE and TARGET labels non-independently (i.e. SOURCE labels can become TARGET labels and vice versa)
 
 ```{r}
 setwd("C:/Users/Mike/Documents/DB_experiments/ptests_perm1_041220")
@@ -144,7 +144,7 @@ max(conv_perc)     #maximum percentage of dataset subsets (day-feeder combinatio
 
 ```
 
-Extended Data Figure 7a:
+Supplementary Fig. 5a:
 
 ```{r}
 library(ggplot2)
@@ -155,7 +155,7 @@ ggsave(filename="perc_change.png",plot=perc_change,type="cairo",dpi=360,width=85
 ```
 
 
-Permutation procedure (Type 2; see Extended Data Figure 6b) - shuffle either SOURCE or TARGET labels independently
+Permutation procedure (Type 2; see Supplementary Fig. 3b) - shuffle either SOURCE or TARGET labels independently
 
 ```{r}
 setwd("C:/Users/Mike/Documents/DB_experiments/ptests_perm2_CS_061220")
@@ -276,7 +276,7 @@ for(i in 1:nperm){
 
 
 
-Permutation procedure (Type 3; see Extended Data Figure 6c) - pairwise (i.e. row-wise) swaps of source and target labels. 
+Permutation procedure (Type 3; see Supplementary Fig. 3c) - pairwise (i.e. row-wise) swaps of source and target labels. 
 
 ```{r}
 setwd("C:/Users/Mike/Documents/DB_experiments/ptests_perm3_071220")
@@ -340,7 +340,7 @@ for(i in 1:nperm){
 
 
 
-Permutation procedure (Type 4; see Extended Data Figure 6d) - shuffle edge weights or arrival latencies only (i.e. without altering the underlying network structure)
+Permutation procedure (Type 4; see Supplementary Fig. 3d) - shuffle edge weights or arrival latencies only (i.e. without altering the underlying network structure)
 
 ```{r}
 #setwd("C:/Users/Mike/Documents/DB_experiments/ptests_perm4_091220_WEIGHT")
