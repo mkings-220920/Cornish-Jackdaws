@@ -313,7 +313,7 @@ Tests for change in coordination of dyads (duration of events and arrival latenc
 ```{r}
 #To re-run the analysis in the paper, set working directory to: .../Eventnet_output/ptests_perm4_Latency_EventnetOutput
 
-#Note, to run this model a dataframe of REM covariates ('covars', line 331) is required; this is due to an issue with calculating the time-varying covariates 'source.isgroupA' and 'target.isgroupA' using Eventnet. The 'covars' dataset can be accessed from the combined raw data file ('DB_REM_INPUT), as is the case in the MK_permutations.R script (see line 17).
+#Note, to run this model a dataframe of REM covariates ('covars', line 329) is required; this is due to an issue with calculating the time-varying covariates 'source.isgroupA' and 'target.isgroupA' using Eventnet. The 'covars' dataset can be accessed from the combined raw data file ('DB_REM_INPUT), as is the case in the MK_permutations.R script (see line 17).
 
 feed_files<-list.files(no..=TRUE) #Get list of files within current directory
 coop_indicator<-unlist(sapply(feed_files,function(x) grepl("COOP_EVENTS",x)))
